@@ -23,17 +23,18 @@ if not IMDB_API_KEY:
 app = FastAPI()
 
 # === IMDB ===
+# === IMDB ===
 async def search_imdb(query: str, max_results=10):
     async with httpx.AsyncClient(timeout=10.0) as client:
         r = await client.get(
-            "https://imdb-api.com/en/API/SearchMovie",
+            "https://imdb-api.com/en/API/SearchMovie",  # ✅ pas d'espace
             params={"apiKey": IMDB_API_KEY, "expression": query}
         )
         return r.json().get("results", [])[:max_results] if r.status_code == 200 else []
 
 async def get_imdb_details(imdb_id: str):
     async with httpx.AsyncClient(timeout=10.0) as client:
-        r = await client.get(f"https://imdb-api.com/en/API/Title/{IMDB_API_KEY}/{imdb_id}")
+        r = await client.get(f"https://imdb-api.com/en/API/Title/{IMDB_API_KEY}/{imdb_id}")  # ✅ pas d'espace
         return r.json() if r.status_code == 200 else None
 
 # === TELEGRAM HANDLERS ===
