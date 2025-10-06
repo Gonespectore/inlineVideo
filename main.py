@@ -1,6 +1,5 @@
 import os
 import logging
-import asyncpg
 import httpx
 from fastapi import FastAPI, Request
 from telegram import Update, InlineQueryResultArticle, InputTextMessageContent
@@ -13,15 +12,19 @@ load_dotenv()
 # === CONFIG ===
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 IMDB_API_KEY = os.getenv("IMDB_API_KEY")
-DATABASE_URL = os.getenv("DATABASE_URL")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+
+if not TELEGRAM_TOKEN:
+    raise ValueError("❌ TELEGRAM_BOT_TOKEN manquant dans les variables d'environnement.")
+if not IMDB_API_KEY:
+    raise ValueError("❌ IMDB_API_KEY manquant dans les variables d'environnement.")
 
 # === FASTAPI ===
 app = FastAPI()
 
 # === IMDB ===
 async def search_imdb(query: str, max_results=10):
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=10.0) as client:
         r = await client.get(
             "https://imdb-api.com/en/API/SearchMovie",
             params={"apiKey": IMDB_API_KEY, "expression": query}
@@ -29,34 +32,16 @@ async def search_imdb(query: str, max_results=10):
         return r.json().get("results", [])[:max_results] if r.status_code == 200 else []
 
 async def get_imdb_details(imdb_id: str):
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=10.0) as client:
         r = await client.get(f"https://imdb-api.com/en/API/Title/{IMDB_API_KEY}/{imdb_id}")
         return r.json() if r.status_code == 200 else None
 
-# === DB ===
-async def init_db():
-    conn = await asyncpg.connect(DATABASE_URL)
-    await conn.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id BIGINT PRIMARY KEY,
-            username TEXT,
-            created_at TIMESTAMP DEFAULT NOW()
-        )
-    """)
-    await conn.close()
-
-async def save_user(user_id, username):
-    conn = await asyncpg.connect(DATABASE_URL)
-    await conn.execute(
-        "INSERT INTO users (id, username) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING",
-        user_id, username
-    )
-    await conn.close()
-
 # === TELEGRAM HANDLERS ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await save_user(update.effective_user.id, update.effective_user.username)
-    await update.message.reply_text("🎬 Tapez @ce_bot nom_du_film pour chercher !")
+    await update.message.reply_text(
+        "🎬 Bienvenue !\n\nTapez <b>@votre_bot nom_du_film</b> dans n'importe quelle discussion pour une recherche instantanée !",
+        parse_mode=ParseMode.HTML
+    )
 
 async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.inline_query.query.strip()
@@ -64,17 +49,22 @@ async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.inline_query.answer([], cache_time=1)
         return
 
-    results = []
     movies = await search_imdb(query)
+    results = []
     for m in movies:
+        title = m.get("title", "N/A")
+        year = m.get("description", "").split("–")[0].strip() or "N/A"
+        imdb_id = m.get("id", "")
+        image = m.get("image", "https://via.placeholder.com/100?text=No+Image")
+
         results.append(
             InlineQueryResultArticle(
-                id=f"imdb_{m['id']}",
-                title=m["title"],
-                description=m.get("description", "").split("–")[0].strip() or "N/A",
-                thumbnail_url=m.get("image", "https://via.placeholder.com/100"),
+                id=f"imdb_{imdb_id}",
+                title=title,
+                description=year,
+                thumbnail_url=image,
                 input_message_content=InputTextMessageContent(
-                    f"🎬 <b>{m['title']}</b>\n\n🔍 Chargement...",
+                    f"🎬 <b>{title}</b> ({year})\n\n🔍 Chargement des détails...",
                     parse_mode=ParseMode.HTML
                 )
             )
@@ -91,10 +81,10 @@ async def chosen_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if movie and not movie.get("errorMessage"):
             text = (
                 f"🎬 <b>{movie.get('title', 'N/A')}</b> ({movie.get('year', 'N/A')})\n"
-                f"⭐ {movie.get('imDbRating', 'N/A')}/10\n"
-                f"🎭 {movie.get('genres', 'N/A')}\n\n"
-                f"{movie.get('plot', 'Aucune description.')}\n\n"
-                f"🔗 <a href='https://www.imdb.com/title/{imdb_id}/'>IMDB</a>"
+                f"⭐ Note : {movie.get('imDbRating', 'N/A')}/10\n"
+                f"🎭 Genres : {movie.get('genres', 'N/A')}\n\n"
+                f"{movie.get('plot', 'Aucune description disponible.')}\n\n"
+                f"🔗 <a href='https://www.imdb.com/title/{imdb_id}/'>Voir sur IMDB</a>"
             )
             photo = movie.get("image")
             try:
@@ -102,10 +92,13 @@ async def chosen_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await context.bot.send_photo(user.id, photo, caption=text, parse_mode=ParseMode.HTML)
                 else:
                     await context.bot.send_message(user.id, text, parse_mode=ParseMode.HTML)
-            except:
-                await context.bot.send_message(user.id, "✅ Fiche du film envoyée.")
+            except Exception as e:
+                logging.error(f"Erreur envoi message: {e}")
+                await context.bot.send_message(user.id, "✅ Fiche du film chargée.")
         else:
-            await context.bot.send_message(user.id, "❌ Film non trouvé.")
+            await context.bot.send_message(user.id, "❌ Impossible de charger les détails du film.")
+    else:
+        await context.bot.send_message(user.id, "❌ Résultat invalide.")
 
 # === LANCEMENT ===
 telegram_app = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -115,9 +108,12 @@ telegram_app.add_handler(ChosenInlineResultHandler(chosen_result))
 
 @app.on_event("startup")
 async def startup():
-    await init_db()
+    logging.info("Démarrage du bot...")
     if WEBHOOK_URL:
         await telegram_app.bot.set_webhook(WEBHOOK_URL)
+        logging.info(f"Webhook défini : {WEBHOOK_URL}")
+    else:
+        logging.warning("WEBHOOK_URL non défini — mode webhook désactivé")
 
 @app.post("/webhook")
 async def webhook(req: Request):
@@ -127,4 +123,4 @@ async def webhook(req: Request):
 
 @app.get("/")
 def health():
-    return {"status": "inline bot ready"}
+    return {"status": "✅ MovieBot Inline Ready"}

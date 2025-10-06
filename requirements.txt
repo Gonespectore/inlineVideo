@@ -1,6 +1,5 @@
 fastapi
 uvicorn[standard]
 python-telegram-bot==20.7
-asyncpg
 httpx
 python-dotenv
