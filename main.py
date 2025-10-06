@@ -11,7 +11,7 @@ load_dotenv()
 
 # === CONFIG ===
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-OMDB_API_KEY = os.getenv("OMDB_API_KEY")  # ← maintenant OMDB
+OMDB_API_KEY = os.getenv("OMDB_API_KEY")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
 if not TELEGRAM_TOKEN:
@@ -26,7 +26,7 @@ async def search_omdb(query: str, max_results=10):
     async with httpx.AsyncClient(timeout=10.0) as client:
         r = await client.get(
             "http://www.omdbapi.com/",
-            params={"apikey": OMDB_API_KEY, "s": query, "type": "movie,series"}
+            params={"apikey": OMDB_API_KEY, "s": query}
         )
         if r.status_code == 200:
             data = r.json()
@@ -50,15 +50,12 @@ async def get_omdb_details(imdb_id: str):
 def clean_poster_url(url: str) -> str:
     if not url or url == "N/A":
         return "https://via.placeholder.com/300x450/333333/FFFFFF?text=🎬+Affiche+non+dispo"
-    # OMDb renvoie parfois "N/A" ou des URLs avec des caractères bizarres
-    if "poster" in url.lower() or "images" in url:
-        return url
-    return "https://via.placeholder.com/300x450/333333/FFFFFF?text=🎬+Affiche+non+dispo"
+    return url if url.startswith("http") else "https://via.placeholder.com/300x450/333333/FFFFFF?text=🎬+Affiche+non+dispo"
 
 # === HANDLERS ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🎬 Tapez <b>@votre_bot nom_du_film</b> pour chercher !",
+        "🎬 Tapez <b>@votre_bot nom_du_film</b> pour une recherche instantanée !",
         parse_mode=ParseMode.HTML
     )
 
@@ -74,16 +71,16 @@ async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
         title = m.get("Title", "N/A")
         year = m.get("Year", "N/A")
         imdb_id = m.get("imdbID", "")
-        poster = m.get("Poster", "")
+        poster = clean_poster_url(m.get("Poster", ""))
 
         results.append(
             InlineQueryResultArticle(
                 id=f"omdb_{imdb_id}",
                 title=title,
                 description=year,
-                thumbnail_url=clean_poster_url(poster),
+                thumbnail_url=poster,
                 input_message_content=InputTextMessageContent(
-                    f"🎬 <b>{title}</b> ({year})\n\n🔍 Chargement...",
+                    f"🎬 <b>{title}</b> ({year})\n\n🔍 Chargement des détails...",
                     parse_mode=ParseMode.HTML
                 )
             )
@@ -114,7 +111,7 @@ async def chosen_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
             try:
-                if poster and "placeholder" not in poster:
+                if "placeholder" not in poster:
                     await context.bot.send_photo(user.id, photo=poster, caption=text, parse_mode=ParseMode.HTML)
                 else:
                     await context.bot.send_message(user.id, text, parse_mode=ParseMode.HTML)
@@ -122,7 +119,7 @@ async def chosen_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logging.error(f"Erreur envoi photo: {e}")
                 await context.bot.send_message(user.id, text, parse_mode=ParseMode.HTML)
         else:
-            await context.bot.send_message(user.id, "❌ Film non trouvé sur OMDb.")
+            await context.bot.send_message(user.id, "❌ Film non trouvé.")
     else:
         await context.bot.send_message(user.id, "❌ Résultat invalide.")
 
@@ -134,7 +131,7 @@ telegram_app.add_handler(ChosenInlineResultHandler(chosen_result))
 
 @app.on_event("startup")
 async def startup():
-    logging.info("Bot démarré avec OMDb.")
+    logging.info("✅ Bot démarré avec OMDb.")
     if WEBHOOK_URL:
         await telegram_app.bot.set_webhook(WEBHOOK_URL)
 
@@ -146,4 +143,4 @@ async def webhook(req: Request):
 
 @app.get("/")
 def health():
-    return {"status": "✅ Bot OMDb prêt"}
+    return {"status": "✅ Bot OMDb - Inline activé"}
