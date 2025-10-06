@@ -11,36 +11,54 @@ load_dotenv()
 
 # === CONFIG ===
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-IMDB_API_KEY = os.getenv("IMDB_API_KEY")
+OMDB_API_KEY = os.getenv("OMDB_API_KEY")  # ← maintenant OMDB
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
 if not TELEGRAM_TOKEN:
-    raise ValueError("❌ TELEGRAM_BOT_TOKEN manquant dans les variables d'environnement.")
-if not IMDB_API_KEY:
-    raise ValueError("❌ IMDB_API_KEY manquant dans les variables d'environnement.")
+    raise ValueError("❌ TELEGRAM_BOT_TOKEN manquant.")
+if not OMDB_API_KEY:
+    raise ValueError("❌ OMDB_API_KEY manquant.")
 
-# === FASTAPI ===
 app = FastAPI()
 
-# === IMDB ===
-# === IMDB ===
-async def search_imdb(query: str, max_results=10):
+# === OMDb API ===
+async def search_omdb(query: str, max_results=10):
     async with httpx.AsyncClient(timeout=10.0) as client:
         r = await client.get(
-            "https://imdb-api.com/en/API/SearchMovie",  # ✅ pas d'espace
-            params={"apiKey": IMDB_API_KEY, "expression": query}
+            "http://www.omdbapi.com/",
+            params={"apikey": OMDB_API_KEY, "s": query, "type": "movie,series"}
         )
-        return r.json().get("results", [])[:max_results] if r.status_code == 200 else []
+        if r.status_code == 200:
+            data = r.json()
+            if data.get("Response") == "True":
+                return data.get("Search", [])[:max_results]
+        return []
 
-async def get_imdb_details(imdb_id: str):
+async def get_omdb_details(imdb_id: str):
     async with httpx.AsyncClient(timeout=10.0) as client:
-        r = await client.get(f"https://imdb-api.com/en/API/Title/{IMDB_API_KEY}/{imdb_id}")  # ✅ pas d'espace
-        return r.json() if r.status_code == 200 else None
+        r = await client.get(
+            "http://www.omdbapi.com/",
+            params={"apikey": OMDB_API_KEY, "i": imdb_id}
+        )
+        if r.status_code == 200:
+            data = r.json()
+            if data.get("Response") == "True":
+                return data
+        return None
 
-# === TELEGRAM HANDLERS ===
+# === UTILS ===
+def clean_poster_url(url: str) -> str:
+    if not url or url == "N/A":
+        return "https://via.placeholder.com/300x450/333333/FFFFFF?text=🎬+Affiche+non+dispo"
+    # OMDb renvoie parfois "N/A" ou des URLs avec des caractères bizarres
+    if "poster" in url.lower() or "images" in url:
+        return url
+    return "https://via.placeholder.com/300x450/333333/FFFFFF?text=🎬+Affiche+non+dispo"
+
+# === HANDLERS ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🎬 Bienvenue !\n\nTapez <b>@votre_bot nom_du_film</b> dans n'importe quelle discussion pour une recherche instantanée !",
+        "🎬 Tapez <b>@votre_bot nom_du_film</b> pour chercher !",
         parse_mode=ParseMode.HTML
     )
 
@@ -50,22 +68,22 @@ async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.inline_query.answer([], cache_time=1)
         return
 
-    movies = await search_imdb(query)
+    movies = await search_omdb(query)
     results = []
     for m in movies:
-        title = m.get("title", "N/A")
-        year = m.get("description", "").split("–")[0].strip() or "N/A"
-        imdb_id = m.get("id", "")
-        image = m.get("image", "https://via.placeholder.com/100?text=No+Image")
+        title = m.get("Title", "N/A")
+        year = m.get("Year", "N/A")
+        imdb_id = m.get("imdbID", "")
+        poster = m.get("Poster", "")
 
         results.append(
             InlineQueryResultArticle(
-                id=f"imdb_{imdb_id}",
+                id=f"omdb_{imdb_id}",
                 title=title,
                 description=year,
-                thumbnail_url=image,
+                thumbnail_url=clean_poster_url(poster),
                 input_message_content=InputTextMessageContent(
-                    f"🎬 <b>{title}</b> ({year})\n\n🔍 Chargement des détails...",
+                    f"🎬 <b>{title}</b> ({year})\n\n🔍 Chargement...",
                     parse_mode=ParseMode.HTML
                 )
             )
@@ -76,28 +94,35 @@ async def chosen_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
     result_id = update.chosen_inline_result.result_id
     user = update.chosen_inline_result.from_user
 
-    if result_id.startswith("imdb_"):
-        imdb_id = result_id.replace("imdb_", "")
-        movie = await get_imdb_details(imdb_id)
-        if movie and not movie.get("errorMessage"):
+    if result_id.startswith("omdb_"):
+        imdb_id = result_id.replace("omdb_", "")
+        movie = await get_omdb_details(imdb_id)
+        if movie:
+            title = movie.get("Title", "N/A")
+            year = movie.get("Year", "N/A")
+            rating = movie.get("imdbRating", "N/A")
+            genre = movie.get("Genre", "N/A")
+            plot = movie.get("Plot", "Aucune description.")
+            poster = clean_poster_url(movie.get("Poster"))
+
             text = (
-                f"🎬 <b>{movie.get('title', 'N/A')}</b> ({movie.get('year', 'N/A')})\n"
-                f"⭐ Note : {movie.get('imDbRating', 'N/A')}/10\n"
-                f"🎭 Genres : {movie.get('genres', 'N/A')}\n\n"
-                f"{movie.get('plot', 'Aucune description disponible.')}\n\n"
+                f"🎬 <b>{title}</b> ({year})\n"
+                f"⭐ Note : {rating}/10\n"
+                f"🎭 Genres : {genre}\n\n"
+                f"{plot}\n\n"
                 f"🔗 <a href='https://www.imdb.com/title/{imdb_id}/'>Voir sur IMDB</a>"
             )
-            photo = movie.get("image")
+
             try:
-                if photo:
-                    await context.bot.send_photo(user.id, photo, caption=text, parse_mode=ParseMode.HTML)
+                if poster and "placeholder" not in poster:
+                    await context.bot.send_photo(user.id, photo=poster, caption=text, parse_mode=ParseMode.HTML)
                 else:
                     await context.bot.send_message(user.id, text, parse_mode=ParseMode.HTML)
             except Exception as e:
-                logging.error(f"Erreur envoi message: {e}")
-                await context.bot.send_message(user.id, "✅ Fiche du film chargée.")
+                logging.error(f"Erreur envoi photo: {e}")
+                await context.bot.send_message(user.id, text, parse_mode=ParseMode.HTML)
         else:
-            await context.bot.send_message(user.id, "❌ Impossible de charger les détails du film.")
+            await context.bot.send_message(user.id, "❌ Film non trouvé sur OMDb.")
     else:
         await context.bot.send_message(user.id, "❌ Résultat invalide.")
 
@@ -109,12 +134,9 @@ telegram_app.add_handler(ChosenInlineResultHandler(chosen_result))
 
 @app.on_event("startup")
 async def startup():
-    logging.info("Démarrage du bot...")
+    logging.info("Bot démarré avec OMDb.")
     if WEBHOOK_URL:
         await telegram_app.bot.set_webhook(WEBHOOK_URL)
-        logging.info(f"Webhook défini : {WEBHOOK_URL}")
-    else:
-        logging.warning("WEBHOOK_URL non défini — mode webhook désactivé")
 
 @app.post("/webhook")
 async def webhook(req: Request):
@@ -124,4 +146,4 @@ async def webhook(req: Request):
 
 @app.get("/")
 def health():
-    return {"status": "✅ MovieBot Inline Ready"}
+    return {"status": "✅ Bot OMDb prêt"}
