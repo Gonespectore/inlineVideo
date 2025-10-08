@@ -14,10 +14,9 @@ from telegram.ext import (
 )
 
 # ===== CONFIGURATION =====
-BOT_TOKEN = "TON_TOKEN_ICI"  # Remplace par ton token
-OWNER_ID = 123456789  # Ton ID Telegram (obligatoire pour la sécurité)
-TMDB_API_KEY = "ta_cle_tmdb_ici"  # Optionnel, mais requis pour /movie
-
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+OWNER_ID = os.getenv("OWNER_ID")
+TMDB_API_KEY = os.getenv("TMDB_API_KEY")
 # Footer par défaut
 FOOTER = "@WorldZPrime"
 
