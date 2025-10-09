@@ -476,6 +476,7 @@ def main():
         app.run_webhook(
             listen="0.0.0.0",
             port=PORT,
+            url_path="/webhook",
             webhook_url=f"{WEBHOOK_URL}/webhook",
             allowed_updates=Update.ALL_TYPES
         )
