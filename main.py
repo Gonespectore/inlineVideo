@@ -19,19 +19,49 @@ logger = logging.getLogger(__name__)
 
 # Variables d'environnement
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-OWNER_ID = int(os.environ.get("OWNER_ID", 0))
 TMDB_API_KEY = os.environ.get("TMDB_API_KEY")
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
 PORT = int(os.environ.get("PORT", 8000))
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "production")
 
+# ✅ Parsing des IDs autorisés (multi-utilisateurs)
+def parse_owner_ids() -> set[int]:
+    """Parse OWNER_IDS depuis les variables d'environnement."""
+    owner_ids_str = os.environ.get("OWNER_IDS", "").strip()
+    if not owner_ids_str:
+        # Fallback sur OWNER_ID (pour compatibilité)
+        owner_id = os.environ.get("OWNER_ID")
+        if owner_id:
+            try:
+                return {int(owner_id)}
+            except ValueError:
+                raise ValueError(f"❌ OWNER_ID invalide : {owner_id}")
+        raise ValueError("❌ OWNER_IDS ou OWNER_ID requis")
+    
+    try:
+        # Supporte : "123,456,789" ou "123 456 789"
+        ids = set()
+        for part in re.split(r"[,\s]+", owner_ids_str):
+            if part:
+                ids.add(int(part))
+        if not ids:
+            raise ValueError("❌ Aucun ID valide trouvé")
+        return ids
+    except ValueError as e:
+        raise ValueError(f"❌ Format invalide pour OWNER_IDS : {owner_ids_str}") from e
+
+# Charge la liste au démarrage
+AUTHORIZED_USER_IDS = parse_owner_ids()
+
 # Validation de la configuration
 if not BOT_TOKEN:
     raise ValueError("❌ BOT_TOKEN est requis")
-if not OWNER_ID:
-    raise ValueError("❌ OWNER_ID est requis")
+if not AUTHORIZED_USER_IDS:
+    raise ValueError("❌ Au moins un utilisateur autorisé requis")
 if not WEBHOOK_URL and ENVIRONMENT == "production":
     raise ValueError("❌ WEBHOOK_URL est requis en production")
+
+logger.info(f"✅ {len(AUTHORIZED_USER_IDS)} utilisateur(s) autorisé(s)")
 
 # État dynamique
 _footer = os.environ.get("FOOTER", "@WorldZPrime")
@@ -71,8 +101,8 @@ def month_name(m: int) -> str:
     return months[m] if 1 <= m <= 12 else "?"
 
 def is_owner(user_id: int) -> bool:
-    """Vérifie si l'utilisateur est le propriétaire."""
-    return user_id == OWNER_ID
+    """Vérifie si l'utilisateur est autorisé."""
+    return user_id in AUTHORIZED_USER_IDS
 
 def sanitize_text(text: str, max_length: int = 480) -> str:
     """Nettoie et tronque le texte."""
@@ -250,7 +280,8 @@ def format_movie(data: Dict[str, Any]) -> str:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Commande /start."""
     if not is_owner(update.effective_user.id):
-        await update.message.reply_text("⛔ Accès refusé. Bot réservé au propriétaire.")
+        await update.message.reply_text("⛔ Accès refusé. Bot réservé aux utilisateurs autorisés.")
+        logger.warning(f"❌ Tentative d'accès refusée - User ID: {update.effective_user.id}")
         return
     
     welcome = f"""👋 {bold('Bienvenue')} !
@@ -266,6 +297,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🤖 Bot développé par {_footer}"""
     
     await update.message.reply_text(welcome)
+    logger.info(f"✅ /start - User: {update.effective_user.username or update.effective_user.id}")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Commande /help."""
@@ -282,10 +314,11 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 • Cache: {len(_cache)} entrées
 • Footer actuel: {_footer}
+• Utilisateurs autorisés: {len(AUTHORIZED_USER_IDS)}
 • Environnement: {ENVIRONMENT}
 • TMDB: {'✅ Configuré' if TMDB_API_KEY else '❌ Non configuré'}
 
-🕐 Uptime: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
+🕐 Heure: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
     
     await update.message.reply_text(stats_text)
 
@@ -443,8 +476,7 @@ def main():
         app.run_webhook(
             listen="0.0.0.0",
             port=PORT,
-            url_path="/webhook",  # ✅ C'est ce que le serveur écoute localement
-            webhook_url=f"{WEBHOOK_URL}/webhook",  # ✅ C'est ce que Telegram utilise
+            webhook_url=f"{WEBHOOK_URL}/webhook",
             allowed_updates=Update.ALL_TYPES
         )
     else:
