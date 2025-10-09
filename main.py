@@ -443,7 +443,8 @@ def main():
         app.run_webhook(
             listen="0.0.0.0",
             port=PORT,
-            webhook_url=f"{WEBHOOK_URL}/webhook",
+            url_path="/webhook",  # ✅ C'est ce que le serveur écoute localement
+            webhook_url=f"{WEBHOOK_URL}/webhook",  # ✅ C'est ce que Telegram utilise
             allowed_updates=Update.ALL_TYPES
         )
     else:
